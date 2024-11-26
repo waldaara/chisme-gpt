@@ -35,26 +35,25 @@ int main() {
     return EXIT_FAILURE;
   }
 
-  printf("Conectado al servidor.\n");
+  printf("Connected to server\n\n");
 
   while (1) {
-    printf("> ");
+    leer_respuesta(socket_cliente, respuesta, sizeof(respuesta));
+    printf("\n(server): %s\n", respuesta);
+
+    printf("(client): ");
     fgets(mensaje, sizeof(mensaje), stdin);
     mensaje[strcspn(mensaje, "\n")] = 0; // Eliminar salto de línea
 
-    if (strcasecmp(mensaje, "SALIR") == 0) {
+    if (strcasecmp(mensaje, "EXIT") == 0) {
       break; // Salir del bucle
     }
 
     enviar_mensaje(socket_cliente, mensaje);
-
-    // Leer respuesta del servidor
-    // leer_respuesta(socket_cliente, respuesta, sizeof(respuesta));
-    // printf("(server): %s\n", respuesta);
   }
 
   close(socket_cliente);
-  printf("Conexión cerrada.\n");
+  printf("\nConnection closed\n");
   return EXIT_SUCCESS;
 }
 

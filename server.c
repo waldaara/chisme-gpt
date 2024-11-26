@@ -92,124 +92,98 @@ void *worker_thread(void *arg) {
   return NULL;
 }
 
-// Function to handle client connection
-void handle_client(int client_socket) {
-  char buffer[MAX_BUFFER];
-  int read_size = 0;
-  int message_id = rand() % 1000; // Random message ID
-  int is_postpaid = rand() % 2;   // Randomly choose prepaid (0) or postpaid (1)
-
-  char *message = "Enter your ID (enter -1 if you don't have one): ";
-
+// returns -1 if somethong went wrong, 0 if ok
+int send_message_to_client(int client_socket, const char *message,
+                           char buffer[MAX_BUFFER]) {
   send(client_socket, message, strlen(message), 0);
 
-  read_size = recv(client_socket, buffer, MAX_BUFFER, 0);
+  int read_size = recv(client_socket, buffer, MAX_BUFFER, 0);
 
   if (read_size == 0) {
     printf("Client %d disconnected\n", client_socket);
     close(client_socket);
 
-    return;
+    return -1;
   }
 
   if (read_size < 0) {
     perror("Error receiving message");
     close(client_socket);
 
-    return;
+    return -1;
   }
 
   buffer[read_size] = '\0';
 
+  return 0;
+}
+
+void create_user(int client_socket, char buffer[MAX_BUFFER]) {
+  if (send_message_to_client(client_socket,
+                             "Enter your user type (0 prepaid - 1 postpaid)",
+                             buffer) == -1) {
+    return;
+  };
+
+  int user_type = atoi(buffer);
+
+  User *new_user = malloc(sizeof(User));
+
+  new_user->user_type = user_type;
+  new_user->message_count = user_type == 0 ? 0 : -1;
+
+  pthread_mutex_lock(&table_mutex);
+
+  guint users_count = g_hash_table_size(users_table);
+
+  int user_id = users_count + 1;
+  g_hash_table_insert(users_table, &user_id, new_user);
+
+  pthread_mutex_unlock(&table_mutex);
+}
+
+// Function to handle client connection
+void handle_client(int client_socket) {
+  char buffer[MAX_BUFFER];
+  int message_id = rand() % 1000; // Random message ID
+  int is_postpaid = rand() % 2;   // Randomly choose prepaid (0) or postpaid (1)
+
+  if (send_message_to_client(client_socket,
+                             "Enter your ID (enter -1 if you don't have one)",
+                             buffer) == -1) {
+    return;
+  };
+
   int user_id = atoi(buffer);
 
   if (user_id <= -1) {
-    *message = "Enter your user type (0 prepaid - 1 postpaid): ";
-
-    send(client_socket, message, strlen(message), 0);
-
-    read_size = recv(client_socket, buffer, MAX_BUFFER, 0);
-
-    if (read_size == 0) {
-      printf("Client %d disconnected\n", client_socket);
-      close(client_socket);
-
-      return;
-    }
-
-    if (read_size < 0) {
-      perror("Error receiving message");
-
-      return;
-    }
-
-    buffer[read_size] = '\0';
-
-    int user_type = atoi(buffer);
-
-    User *new_user = malloc(sizeof(User));
-
-    new_user->user_type = user_type;
-    new_user->message_count = user_type == 0 ? 0 : -1;
-
-    pthread_mutex_lock(&table_mutex);
-
-    guint users_count = g_hash_table_size(users_table);
-
-    user_id = users_count + 1;
-    g_hash_table_insert(users_table, &user_id, new_user);
-
-    pthread_mutex_unlock(&table_mutex);
+    create_user(client_socket, buffer);
   }
 
   User *user = g_hash_table_lookup(users_table, &user_id);
 
   while (user == NULL) {
-    *message = "Invalid ID, enter again a valid one or -1 to create one: ";
-
-    send(client_socket, message, strlen(message), 0);
-
-    read_size = recv(client_socket, buffer, MAX_BUFFER, 0);
-
-    if (read_size == 0) {
-      printf("Client %d disconnected\n", client_socket);
-      close(client_socket);
-
+    if (send_message_to_client(
+            client_socket,
+            "Invalid ID, enter again a valid one or -1 to create one",
+            buffer) == -1) {
       return;
-    }
-
-    if (read_size < 0) {
-      perror("Error receiving message");
-      close(client_socket);
-
-      return;
-    }
-
-    buffer[read_size] = '\0';
+    };
 
     user_id = atoi(buffer);
 
-    *user = g_hash_table_lookup(users_table, &user_id);
+    if (user_id <= -1) {
+      create_user(client_socket, buffer);
+    }
+
+    user = (User *)g_hash_table_lookup(users_table, &user_id);
   }
 
   while (1) {
-    read_size = recv(client_socket, buffer, MAX_BUFFER, 0);
-
-    if (read_size == 0) {
-      printf("Client %d disconnected\n", client_socket);
-      close(client_socket);
-
+    if (send_message_to_client(client_socket, "Enter your message", buffer) ==
+        -1) {
       return;
     }
-
-    if (read_size < 0) {
-      perror("Error receiving message");
-      close(client_socket);
-
-      return;
-    }
-
-    buffer[read_size] = '\0'; // Null terminate the string
 
     if (is_postpaid) {
       printf("New message (postpaid): %s\n", buffer);
