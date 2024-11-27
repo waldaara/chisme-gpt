@@ -1,107 +1,116 @@
-ChismeGPT - Sistema de Mensajería Concurrente
+INSTRUCCIONES DE USO
 
 
 
-
-Para compilar y ejecutar este sistema, necesitas tener instalados los siguientes paquetes:
-
-    GCC: El compilador de C.
-    glib-2.0: Una biblioteca que se utiliza para manejar estructuras de datos como tablas hash y colas.
+Librerías necesarias:
 
 
 
+Este proyecto requiere las siguientes bibliotecas en tu sistema:
 
-Puedes instalar las dependencias necesarias en una distribución de Ubuntu con el siguiente comando:
-
-    sudo apt-get install build-essential libglib2.0-dev
-
-
-
-
-Compilación del Proyecto:
-
-El proyecto incluye dos programas: el servidor y el cliente. Puedes compilar ambos utilizando el siguiente comando:
-
-    make
-
-Esto generará dos ejecutables:
-
-    server: El programa del servidor.
-    client: El programa del cliente.
+-glib-2.0 (ver instrucciones de compilacion)
+-pthread
+-arpa/inet.h y netinet/in.h para manejo de sockets
 
 
 
-
-Ejecutando el Servidor:
-
-Para ejecutar el servidor, usa el siguiente comando:
-
-    ./server
-
-El servidor escuchará en el puerto 8080 para conexiones entrantes de clientes.
+Compilación y ejecución:
 
 
 
-
-Ejecutando el Cliente:
-
-Para ejecutar un cliente, usa el siguiente comando en otro terminal:
-
-    ./client
-
-El cliente se conectará al servidor en la dirección 127.0.0.1 y el puerto 8080. El cliente te pedirá que ingreses un nombre de usuario y un tipo de cuenta (prepago o pospago). Después de eso, podrás enviar mensajes al servidor.
+Para compilar el proyecto, se utiliza el archivo Makefile. Puedes usar los siguientes comandos:
 
 
-
-
-Interacción del Cliente:
-
-        El cliente te pedirá un nombre de usuario. Si el usuario no existe, se creará una cuenta para ti.
-        
-        Luego, te pedirá que selecciones un tipo de usuario (pre-pago o pos-pago).
-        
-        Finalmente, podrás enviar mensajes. Los usuarios pre-pago tienen un límite de 10 mensajes, mientras que los pos-pago no tienen límite.
-        
-        Los mensajes de los usuarios pos-pago tienen prioridad sobre los mensajes de los usuarios pre-pago.
-
-
-
-
-Salir del Cliente:
-
-Para salir del cliente, simplemente escribe el comando: 
-      
-      exit
-
-
-
-
-Comportamiento del Servidor:
-
-    El servidor acepta conexiones de múltiples clientes simultáneamente mediante hilos.
+- Compilar el proyecto:
     
-    Cada mensaje es procesado en orden, pero los mensajes de los usuarios pos-pago se procesan con prioridad, incluso si hay mensajes de usuarios pre-pago en espera.
-    
-    Los usuarios pre-pago tienen un límite de 10 mensajes. Una vez que este límite es alcanzado, no podrán enviar más mensajes.
-    
-    El servidor muestra en todo momento el número de usuarios conectados.
+    $ make
+
+Este comando compilará el servidor y el cliente y generará los ejecutables.
+
+
+- Limpiar archivos compilados:
+
+    $ make clean
+
+
+-Instalar librerías (solo en Debian based):
+
+    $ make install
+
+    Si se desea manualmente:
+
+    $ sudo apt-get install libglib2.0-dev
 
 
 
 
-Comandos Útiles:
-
-    make: Compila el proyecto (el servidor y el cliente).
-    make clean: Elimina los archivos objeto y los ejecutables generados.
-    make install: Instala las dependencias necesarias.
+Ejecutar el servidor:
 
 
 
 
-Notas Importantes:
+Una vez que el proyecto esté compilado, puedes ejecutar el servidor con el siguiente comando:
 
-    Puerto: El servidor escucha en el puerto 8080. Asegúrate de que este puerto esté libre en tu máquina.
-    
-    Concurrencia: El sistema maneja múltiples conexiones simultáneas utilizando hilos. Esto permite que varios clientes interactúen con el servidor de manera concurrente.
-    
-    Base de Datos en Memoria: La base de datos de usuarios se almacena en memoria. Si el servidor se detiene, todos los datos se perderán.
+    $ ./server -n <max_concurrent_messages> -t <time_in_ms>
+
+Donde:
+
+-n <max_concurrent_messages>: Especifica el número máximo de mensajes que pueden ser procesados de manera concurrente. Por ejemplo, -n 5 permitirá que 5 hilos trabajen simultáneamente.
+-t <time_in_ms>: Especifica el tiempo que tarda el servidor en procesar cada mensaje (en milisegundos). Por ejemplo, -t 100 hará que el servidor tarde 100 ms en procesar cada mensaje.
+
+Ejemplo de ejecución:
+
+    $ ./server -n 5 -t 2000
+
+
+
+
+Interacción con el servidor:
+
+
+
+
+
+Una vez que el servidor está en funcionamiento, los clientes pueden conectarse al servidor a través de un cliente:
+
+    $ ./client
+
+Los clientes pueden realizar las siguientes acciones:
+
+- Ingresar su ID de usuario: Si el cliente ya tiene un ID, puede ingresarlo. Si no tiene uno, se le solicitará crear uno nuevo.
+- Enviar mensajes: Los usuarios prepagados tienen un límite de 10 mensajes, mientras que los usuarios postpago pueden enviar mensajes sin restricciones.
+- Cambiar su tipo de usuario: Los usuarios pueden cambiar su tipo de plan (de prepagado a postpago o viceversa) enviando el comando change <user_type>, donde <user_type> es 0 para prepagado o 1 para postpago. El servidor procesará el cambio si es válido.
+
+Comandos disponibles:
+
+change 0: Cambia a prepagado.
+change 1: Cambia a postpago.
+exit: Cierra la conexión con el servidor.
+
+
+Ejemplo de conversación con el servidor:
+
+
+    Enter your ID (enter -1 if you don't have one): 1
+    Enter your message (ID: 1, User type: prepaid, Messages left: 10): Hello
+    Message 1 processed (prepaid) in 100 ms
+
+
+En caso de que un usuario prepagado intente enviar más de 10 mensajes, el servidor le notificará que ha excedido el límite.
+
+
+
+TEST AUTOMATIZADO:
+
+
+Para su comodidad, hice un test en python (test_server.py) para simular 5 usuarios concurrentes que envian 20 messages cada uno
+
+ - Primero levante el server, por ejemplo:
+
+    $ ./server -n 5 -t 2000
+
+ - Luego:
+
+    $ python3 test_server.py
+
+Puede modificar los parámetros del server y del test de python (checar las variables globales del script) para que pruebe todo el funcionamiento :)

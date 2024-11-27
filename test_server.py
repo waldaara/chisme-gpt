@@ -1,61 +1,83 @@
-import asyncio
 import socket
+import threading
 import time
+import random
 
-# Configuración del servidor y pruebas
+# Variables globales para configurar el comportamiento del test
+NUM_CLIENTS = 5  # Número de clientes a crear
+NUM_MESSAGES_PER_USER = 20
+
+# Dirección y puerto del servidor
 SERVER_HOST = '127.0.0.1'
 SERVER_PORT = 8080
-NUM_CLIENTS = 5  # Número total de clientes a simular
-NUM_MESSAGES = 5  # Número de mensajes por cliente
-TIME_BETWEEN_MESSAGES = 1  # Tiempo en segundos entre mensajes
 
-# Función asincrónica para manejar la conexión de un cliente
-async def manejar_cliente(cliente_id, tipo_usuario):
-    # Crear un socket de cliente
-    cliente_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    cliente_socket.connect((SERVER_HOST, SERVER_PORT))
+# Función para crear un cliente y conectar al servidor
+def client_thread(client_id):
+    try:
+        # Crear socket de cliente
+        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client_socket.connect((SERVER_HOST, SERVER_PORT))
+        
+        # Crear nuevo cliente (puede ser prepago o postpago)
+        # El cliente elige aleatoriamente entre prepago y postpago
+        user_type = random.choice([0, 1])  # 0: prepago, 1: postpago
+        
+        # Iniciar sesión en el servidor
+        buffer = client_socket.recv(1024).decode('utf-8')  # Recibir el mensaje para ingresar ID
+        client_socket.send(str(-1).encode('utf-8'))  # Enviar -1 para crear usuario
+        
+        # Recibir y enviar el tipo de usuario
+        buffer = client_socket.recv(1024).decode('utf-8')
+        client_socket.send(str(user_type).encode('utf-8'))  # Enviar tipo de usuario
+        
+        # Aceptar el mensaje para comenzar
+        buffer = client_socket.recv(1024).decode('utf-8')
+        
+        message_count = 0  # Contador de mensajes enviados por el cliente
 
-    # Enviar el ID
-    print(f"Cliente {cliente_id} ({tipo_usuario}) conectado.")
-    cliente_socket.sendall(f"{cliente_id}".encode())
+        while message_count < NUM_MESSAGES_PER_USER:  # Limitar el número de mensajes enviados
+            time.sleep(random.uniform(0.5, 1.5))  # Simular tiempo de espera entre mensajes
+            
+            if user_type == 0 and message_count >= 10:
+                # Si es prepago y ya ha enviado 10 mensajes, intentar cambiar a postpago
+                print(f"Cliente {client_id} (prepago) ha superado el límite de 10 mensajes.")
+                client_socket.send("change 1".encode('utf-8'))  # Solicitar cambiar a postpago
+                buffer = client_socket.recv(1024).decode('utf-8')  # Recibir confirmación de cambio
+                user_type = 1  # El cliente ahora es postpago
 
-    # Recibir la respuesta del servidor para el tipo de usuario
-    respuesta = cliente_socket.recv(1024).decode()
-    print(f"[{cliente_id}] - {respuesta}")
+            # Enviar mensaje al servidor
+            message = f"Mensaje del cliente {client_id} tipo {user_type}, mensaje {message_count + 1}"
+            client_socket.send(message.encode('utf-8'))
+            print(f"Cliente {client_id} (tipo {user_type}) ha enviado: {message}")
 
-    # Enviar el tipo de usuario (prepago o pospago)
-    cliente_socket.sendall(f"{tipo_usuario}".encode())
+            # Incrementar el contador de mensajes enviados
+            message_count += 1
 
-    # Recibir la confirmación de registro
-    respuesta = cliente_socket.recv(1024).decode()
-    print(f"[{cliente_id}] - {respuesta}")
-
-    # Enviar mensajes al servidor
-    for i in range(NUM_MESSAGES):
-        mensaje = f"Mensaje {i+1} de {cliente_id} ({tipo_usuario})"
-        print(f"[{cliente_id}] Enviando: {mensaje}")
-        cliente_socket.sendall(mensaje.encode())
-        await asyncio.sleep(TIME_BETWEEN_MESSAGES)  # Esperar el tiempo definido antes de enviar el siguiente mensaje
-
-    # Cerrar la conexión
-    cliente_socket.close()
-
-# Función para probar el servidor con múltiples clientes de forma asincrónica
-async def test_servidor():
-    # Crear una lista de tareas de clientes
-    tareas = []
-    for i in range(NUM_CLIENTS):
-        tipo = 'prepago' if i % 2 == 0 else 'pospago'  # Alternar entre prepago y pospago
-        cliente_id = f"cliente_{i+1}"
-        print(f"--- Iniciando cliente {cliente_id} ({tipo}) ---")
-        tarea = asyncio.create_task(manejar_cliente(cliente_id, tipo))
-        tareas.append(tarea)
+            # Recibir respuesta del servidor
+            buffer = client_socket.recv(1024).decode('utf-8')
+            print(f"Cliente {client_id} recibió: {buffer}")
+        
+        # Cerrar la conexión al final
+        client_socket.close()
+        print(f"Cliente {client_id} desconectado.")
     
-    # Esperar a que todas las tareas se completen
-    await asyncio.gather(*tareas)
+    except Exception as e:
+        print(f"Error en cliente {client_id}: {e}")
+
+# Crear y ejecutar múltiples clientes
+def start_test():
+    threads = []
+    for client_id in range(1, NUM_CLIENTS + 1):
+        thread = threading.Thread(target=client_thread, args=(client_id,))
+        thread.start()
+        threads.append(thread)
+
+    # Esperar a que todos los clientes terminen
+    for thread in threads:
+        thread.join()
 
 if __name__ == "__main__":
-    print(f"Test de servidor comenzando... (Clientes: {NUM_CLIENTS}, Mensajes por cliente: {NUM_MESSAGES}, Tiempo entre mensajes: {TIME_BETWEEN_MESSAGES}s)")
-    asyncio.run(test_servidor())
-    print("Prueba completada.")
-
+    # Configuración global de prueba
+    print(f"Iniciando la prueba con {NUM_CLIENTS} clientes y {NUM_MESSAGES_PER_USER} mensajes por usuario...")
+    start_test()
+    print("Prueba terminada.")
