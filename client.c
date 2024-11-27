@@ -43,10 +43,19 @@ int main() {
 
     printf("(client): ");
     fgets(mensaje, sizeof(mensaje), stdin);
-    mensaje[strcspn(mensaje, "\n")] = 0; // Eliminar salto de línea
+    mensaje[strcspn(mensaje, "\n")] = 0;  // Eliminar salto de línea
+
+    // Check for empty input
+    while (strlen(mensaje) == 0) {
+      printf("\nMessage cannot be empty. Please try again.\n\n");
+
+      printf("(client): ");
+      fgets(mensaje, sizeof(mensaje), stdin);
+      mensaje[strcspn(mensaje, "\n")] = 0;  // Eliminar salto de línea
+    }
 
     if (strcasecmp(mensaje, "EXIT") == 0) {
-      break; // Salir del bucle
+      break;  // Salir del bucle
     }
 
     enviar_mensaje(socket_cliente, mensaje);
@@ -74,5 +83,5 @@ void leer_respuesta(int socket, char *respuesta, size_t len) {
   }
 
   respuesta[bytes_leidos] =
-      '\0'; // Asegurarse de que la respuesta está bien terminada
+      '\0';  // Asegurarse de que la respuesta está bien terminada
 }

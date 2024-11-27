@@ -1,5 +1,5 @@
 #include <arpa/inet.h>
-#include <bits/pthreadtypes.h>
+#include <bits/getopt_core.h>
 #include <glib.h>
 #include <netinet/in.h>
 #include <pthread.h>
@@ -12,10 +12,13 @@
 #include <unistd.h>
 
 #define MAX_BUFFER 1024
+#define PREPAID_LIMIT 10
 
 // Global variables
-int n = 0; // Max number of concurrent messages (threads)
-int t = 0; // Time for message processing in ms
+int n = 0;  // Max number of concurrent messages (threads)
+int t = 0;  // Time for message processing in ms
+
+static int message_counter = 0;  // Global counter for unique message IDs
 
 // Message Queues for prepaid and postpaid messages
 GQueue *prepaid_queue;
@@ -26,18 +29,15 @@ pthread_cond_t queue_cond = PTHREAD_COND_INITIALIZER;
 // Users DB
 GHashTable *users_table;
 pthread_mutex_t table_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t table_cond = PTHREAD_COND_INITIALIZER;
 
 typedef struct {
-  int user_type;     // 0 prepaid and 1 postpaid
-  int message_count; // -1 when user type is postpaid
+  int user_type;      // 0 prepaid and 1 postpaid
+  int message_count;  // -1 when user type is postpaid
 } User;
 
 // Function to simulate message processing (sleep for `t` ms)
 void process_message(int message_id, const char *message_type) {
-  // Simulate message processing by sleeping for `t` milliseconds
-  usleep(t * 1000);
-
+  usleep(t * 1000);  // Simulate message processing
   printf("Message %d processed (%s) in %d ms\n", message_id, message_type, t);
 }
 
@@ -45,7 +45,7 @@ void process_message(int message_id, const char *message_type) {
 void add_prepaid_message(int message_id) {
   pthread_mutex_lock(&queue_mutex);
   g_queue_push_tail(prepaid_queue, GINT_TO_POINTER(message_id));
-  pthread_cond_signal(&queue_cond);
+  pthread_cond_broadcast(&queue_cond);  // Notify all waiting threads
   pthread_mutex_unlock(&queue_mutex);
 }
 
@@ -53,7 +53,7 @@ void add_prepaid_message(int message_id) {
 void add_postpaid_message(int message_id) {
   pthread_mutex_lock(&queue_mutex);
   g_queue_push_tail(postpaid_queue, GINT_TO_POINTER(message_id));
-  pthread_cond_signal(&queue_cond);
+  pthread_cond_broadcast(&queue_cond);  // Notify all waiting threads
   pthread_mutex_unlock(&queue_mutex);
 }
 
@@ -74,7 +74,7 @@ void *worker_thread(void *arg) {
       pthread_mutex_lock(&queue_mutex);
     }
 
-    // If no postpaid messages, process prepaid messages
+    // Process prepaid messages if no postpaid messages are available
     if (g_queue_peek_head(prepaid_queue) != NULL) {
       message_id = GPOINTER_TO_INT(g_queue_pop_head(prepaid_queue));
       strcpy(message_type, "prepaid");
@@ -88,28 +88,18 @@ void *worker_thread(void *arg) {
 
     pthread_mutex_unlock(&queue_mutex);
   }
-
   return NULL;
 }
 
-// returns -1 if somethong went wrong, 0 if ok
+// Function to send a message to the client and receive a response
 int send_message_to_client(int client_socket, const char *message,
                            char buffer[MAX_BUFFER]) {
   send(client_socket, message, strlen(message), 0);
 
   int read_size = recv(client_socket, buffer, MAX_BUFFER, 0);
-
-  if (read_size == 0) {
+  if (read_size <= 0) {
     printf("Client %d disconnected\n", client_socket);
     close(client_socket);
-
-    return -1;
-  }
-
-  if (read_size < 0) {
-    perror("Error receiving message");
-    close(client_socket);
-
     return -1;
   }
 
@@ -118,79 +108,170 @@ int send_message_to_client(int client_socket, const char *message,
   return 0;
 }
 
-void create_user(int client_socket, char buffer[MAX_BUFFER]) {
+// Function to create a new user
+int create_user(int client_socket, char buffer[MAX_BUFFER], int *user_id) {
   if (send_message_to_client(client_socket,
                              "Enter your user type (0 prepaid - 1 postpaid)",
                              buffer) == -1) {
-    return;
-  };
+    return -1;
+  }
 
   int user_type = atoi(buffer);
-
   User *new_user = malloc(sizeof(User));
-
   new_user->user_type = user_type;
-  new_user->message_count = user_type == 0 ? 0 : -1;
+  new_user->message_count = (user_type == 0) ? 0 : -1;
+
+  int *user_id_ptr = malloc(sizeof(int));
 
   pthread_mutex_lock(&table_mutex);
 
-  guint users_count = g_hash_table_size(users_table);
-
-  int user_id = users_count + 1;
-  g_hash_table_insert(users_table, &user_id, new_user);
+  *user_id_ptr = g_hash_table_size(users_table) + 1;
+  g_hash_table_insert(users_table, user_id_ptr, new_user);
 
   pthread_mutex_unlock(&table_mutex);
+
+  printf("Client %d successfully created\n", *user_id_ptr);
+  *user_id = *user_id_ptr;  // Update caller's user_id
+  return 0;
 }
 
 // Function to handle client connection
 void handle_client(int client_socket) {
   char buffer[MAX_BUFFER];
-  int message_id = rand() % 1000; // Random message ID
-  int is_postpaid = rand() % 2;   // Randomly choose prepaid (0) or postpaid (1)
 
   if (send_message_to_client(client_socket,
                              "Enter your ID (enter -1 if you don't have one)",
                              buffer) == -1) {
+    close(client_socket);
     return;
-  };
-
-  int user_id = atoi(buffer);
-
-  if (user_id <= -1) {
-    create_user(client_socket, buffer);
   }
 
+  int user_id = atoi(buffer);
+  if (user_id <= -1) {
+    if (create_user(client_socket, buffer, &user_id) == -1) {
+      close(client_socket);
+      return;
+    }
+  }
+
+  pthread_mutex_lock(&table_mutex);
   User *user = g_hash_table_lookup(users_table, &user_id);
+  pthread_mutex_unlock(&table_mutex);
 
   while (user == NULL) {
     if (send_message_to_client(
             client_socket,
             "Invalid ID, enter again a valid one or -1 to create one",
             buffer) == -1) {
+      close(client_socket);
       return;
-    };
-
-    user_id = atoi(buffer);
-
-    if (user_id <= -1) {
-      create_user(client_socket, buffer);
     }
 
-    user = (User *)g_hash_table_lookup(users_table, &user_id);
+    user_id = atoi(buffer);
+    if (user_id <= -1) {
+      if (create_user(client_socket, buffer, &user_id) == -1) {
+        close(client_socket);
+        return;
+      }
+    }
+
+    pthread_mutex_lock(&table_mutex);
+    user = g_hash_table_lookup(users_table, &user_id);
+    pthread_mutex_unlock(&table_mutex);
   }
 
   while (1) {
-    if (send_message_to_client(client_socket, "Enter your message", buffer) ==
-        -1) {
+    while (!user->user_type && user->message_count >= 10) {
+      send(client_socket, "Limit for prepaid user exceeded", 32, 0);
+
+      int read_size = recv(client_socket, buffer, MAX_BUFFER, 0);
+      if (read_size <= 0) {
+        printf("Client %d disconnected\n", client_socket);
+        close(client_socket);
+        return;
+      }
+
+      buffer[read_size] = '\0';
+
+      int new_user_type = -1;
+
+      // Check if the string matches the form "change 0" or "change 1"
+      if (sscanf(buffer, "change %d", &new_user_type) == 1 &&
+          (new_user_type == 0 || new_user_type == 1)) {
+        pthread_mutex_lock(&table_mutex);
+
+        if (user->user_type != new_user_type) {
+          user->user_type = new_user_type;
+          user->message_count = new_user_type ? -1 : 0;
+
+          printf("User updated: user_type = %d\n", user->user_type);
+
+          pthread_mutex_unlock(&table_mutex);
+          break;
+        }
+
+        pthread_mutex_unlock(&table_mutex);
+      }
+    }
+
+    char message[MAX_BUFFER];
+
+    if (user->user_type) {
+      snprintf(message, sizeof(message),
+               "Enter your message (ID: %d, User type: postpaid)", user_id);
+    } else {
+      snprintf(
+          message, sizeof(message),
+          "Enter your message (ID: %d, User type: prepaid, Messages left: %d)",
+          user_id, PREPAID_LIMIT - user->message_count);
+    }
+
+    send(client_socket, message, strlen(message), 0);
+
+    int read_size = recv(client_socket, buffer, MAX_BUFFER, 0);
+    if (read_size <= 0) {
+      printf("Client %d disconnected\n", client_socket);
+      close(client_socket);
       return;
     }
 
-    if (is_postpaid) {
+    buffer[read_size] = '\0';
+
+    int new_user_type = -1;
+
+    // Check if the string matches the form "change 0" or "change 1"
+    if (sscanf(buffer, "change %d", &new_user_type) == 1 &&
+        (new_user_type == 0 || new_user_type == 1)) {
+      pthread_mutex_lock(&table_mutex);
+
+      if (user->user_type != new_user_type) {
+        user->user_type = new_user_type;
+        user->message_count = new_user_type ? -1 : 0;
+
+        printf("User updated: user_type = %d\n", user->user_type);
+      }
+
+      pthread_mutex_unlock(&table_mutex);
+
+      continue;
+    }
+
+    int message_id = __atomic_add_fetch(
+        &message_counter, 1,
+        __ATOMIC_SEQ_CST);  // Atomic increment for thread safety
+
+    if (user->user_type) {
       printf("New message (postpaid): %s\n", buffer);
-      add_postpaid_message(message_id); // Add to postpaid queue
+
+      add_postpaid_message(message_id);
     } else {
       printf("New message (prepaid): %s\n", buffer);
-      add_prepaid_message(message_id); // Add to prepaid queue
+
+      pthread_mutex_lock(&table_mutex);
+      user->message_count += 1;
+      pthread_mutex_unlock(&table_mutex);
+
+      add_prepaid_message(message_id);
     }
   }
 }
@@ -201,56 +282,43 @@ void start_server(int port) {
   struct sockaddr_in server_addr, client_addr;
   socklen_t client_len = sizeof(client_addr);
 
-  // Create the server socket
   server_socket = socket(AF_INET, SOCK_STREAM, 0);
-
   if (server_socket < 0) {
     perror("Error opening socket");
-
     exit(EXIT_FAILURE);
   }
 
-  // Set up the server address struct
   memset(&server_addr, 0, sizeof(server_addr));
   server_addr.sin_family = AF_INET;
   server_addr.sin_addr.s_addr = INADDR_ANY;
   server_addr.sin_port = htons(port);
 
-  // Bind the server socket to the address
   if (bind(server_socket, (struct sockaddr *)&server_addr,
            sizeof(server_addr)) < 0) {
     perror("Error binding socket");
     close(server_socket);
-
     exit(EXIT_FAILURE);
   }
 
-  // Listen for incoming connections
   if (listen(server_socket, 5) < 0) {
     perror("Error listening on socket");
     close(server_socket);
-
     exit(EXIT_FAILURE);
   }
 
   printf("Server listening on port %d...\n", port);
 
-  // Accept client connections and handle them
   while (1) {
     client_socket =
         accept(server_socket, (struct sockaddr *)&client_addr, &client_len);
-
     if (client_socket < 0) {
       perror("Error accepting client connection");
       continue;
     }
 
     printf("New client connected: %d\n", client_socket);
-
-    // Handle client connection in a new thread
     pthread_t thread;
-
-    if (pthread_create(&thread, NULL, (void *)handle_client,
+    if (pthread_create(&thread, NULL, (void *(*)(void *))handle_client,
                        (void *)(intptr_t)client_socket) != 0) {
       perror("Error creating thread");
       close(client_socket);
@@ -260,65 +328,49 @@ void start_server(int port) {
   close(server_socket);
 }
 
+// Main function
 int main(int argc, char *argv[]) {
-  int port = 8080; // Default port
+  int port = 8080;
   int opt;
 
-  // Parse command-line arguments using getopt
   while ((opt = getopt(argc, argv, "n:t:p:")) != -1) {
     switch (opt) {
-    case 'n':
-      n = atoi(optarg);
-
-      if (n <= 0) {
-        fprintf(stderr, "Error: 'n' must be a positive integer.\n");
-
+      case 'n':
+        n = atoi(optarg);
+        if (n <= 0) {
+          fprintf(stderr, "Error: 'n' must be a positive integer.\n");
+          return EXIT_FAILURE;
+        }
+        break;
+      case 't':
+        t = atoi(optarg);
+        if (t <= 0) {
+          fprintf(stderr, "Error: 't' must be a positive integer.\n");
+          return EXIT_FAILURE;
+        }
+        break;
+      case 'p':
+        port = atoi(optarg);
+        if (port <= 0) {
+          fprintf(stderr, "Error: 'p' must be a positive integer.\n");
+          return EXIT_FAILURE;
+        }
+        break;
+      default:
+        fprintf(stderr,
+                "Usage: %s -n <max_concurrent_messages> -t <time_in_ms> -p "
+                "<port>\n",
+                argv[0]);
         return EXIT_FAILURE;
-      }
-
-      break;
-
-    case 't':
-      t = atoi(optarg);
-
-      if (t <= 0) {
-        fprintf(stderr, "Error: 't' must be a positive integer.\n");
-        return EXIT_FAILURE;
-      }
-
-      break;
-
-    case 'p':
-      port = atoi(optarg);
-
-      if (port <= 0) {
-        fprintf(stderr, "Error: 'p' must be a positive integer.\n");
-
-        return EXIT_FAILURE;
-      }
-
-      break;
-
-    default:
-      fprintf(
-          stderr,
-          "Usage: %s -n <max_concurrent_messages> -t <time_in_ms> -p <port>\n",
-          argv[0]);
-
-      return EXIT_FAILURE;
     }
   }
 
   if (n <= 0 || t <= 0) {
-    perror("Error: Both n and t must be positive integers");
-
+    fprintf(stderr, "Error: Both n and t must be positive integers.\n");
     return EXIT_FAILURE;
   }
 
-  // Initialize the users DB
-  users_table = g_hash_table_new(g_int_hash, g_int_equal);
-
-  // Initialize the two message queues
+  users_table = g_hash_table_new_full(g_int_hash, g_int_equal, free, free);
   prepaid_queue = g_queue_new();
   postpaid_queue = g_queue_new();
 
@@ -349,5 +401,5 @@ int main(int argc, char *argv[]) {
   g_queue_free(prepaid_queue);
   g_queue_free(postpaid_queue);
 
-  return 0;
+  return EXIT_SUCCESS;
 }
